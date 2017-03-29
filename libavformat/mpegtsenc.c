@@ -36,6 +36,10 @@
 
 #define PCR_TIME_BASE 27000000
 
+// EMBY
+AVDictionary* cc_dict = NULL;
+// EMBY
+
 /* write DVB SI sections */
 
 #define DVB_PRIVATE_NETWORK_START 0xff01
@@ -901,6 +905,15 @@ static int mpegts_init(AVFormatContext *s)
         ts_st->first_pts_check = 1;
         ts_st->cc              = 15;
         ts_st->discontinuity   = ts->flags & MPEGTS_FLAG_DISCONT;
+        // EMBY
+        // See if there's an initial value for the stream and set it. This
+        // ensures continuity when doing segmented transcodes.
+        //
+        char key[8]; sprintf(key, "%x", ts_st->pid);
+        AVDictionaryEntry* entry = av_dict_get(cc_dict, key, 0, 0);
+        if (entry)
+            ts_st->cc = entry->value[0];
+        // EMBY
         /* update PCR pid by using the first video stream */
         if (st->codecpar->codec_type == AVMEDIA_TYPE_VIDEO &&
             service->pcr_pid == 0x1fff) {
@@ -1216,6 +1229,13 @@ static void mpegts_write_pes(AVFormatContext *s, AVStream *st,
         *q++      = val;
         *q++      = ts_st->pid;
         ts_st->cc = ts_st->cc + 1 & 0xf;
+        // EMBY
+        {
+            char key[8]; sprintf(key, "%x", ts_st->pid);
+            char val[] = { ts_st->cc, 0 };
+            av_dict_set(&cc_dict, key, val, 0);
+        }
+        // EMBY
         *q++      = 0x10 | ts_st->cc; // payload indicator + CC
         if (ts_st->discontinuity) {
             set_af_flag(buf, 0x80);
@@ -1548,11 +1568,25 @@ static int mpegts_write_packet_internal(AVFormatContext *s, AVPacket *pkt)
             dts += delay;
     }
 
+    //EMBY
+    if (ts_st->first_pts_check && pts == AV_NOPTS_VALUE)
+        pts = dts;
+    //EMBY
+
     if (ts_st->first_pts_check && pts == AV_NOPTS_VALUE) {
         av_log(s, AV_LOG_ERROR, "first pts value must be set\n");
         return AVERROR_INVALIDDATA;
     }
     ts_st->first_pts_check = 0;
+
+    //EMBY
+    if (dts < 0 || pts < 0) {
+        // We can't write packets with negative DTS/PTS, but AAC in particular is
+        // likely to create a couple because of its encoder delay.
+        av_log(s, AV_LOG_WARNING, "Ignoring packet with negative DTS (%lld) PTS (%lld) for codec %d\n", dts, pts, st->codec->codec_id);
+        return 0;
+    }
+    //EMBY
 
     if (st->codecpar->codec_id == AV_CODEC_ID_H264) {
         const uint8_t *p = buf, *buf_end = p + size;
@@ -1979,6 +2013,6 @@ AVOutputFormat ff_mpegts_muxer = {
     .write_trailer  = mpegts_write_end,
     .deinit         = mpegts_deinit,
     .check_bitstream = mpegts_check_bitstream,
-    .flags          = AVFMT_ALLOW_FLUSH | AVFMT_VARIABLE_FPS,
+    .flags          = AVFMT_ALLOW_FLUSH | AVFMT_VARIABLE_FPS | AVFMT_TS_NEGATIVE, //EMBY: add NEGATIVE,
     .priv_class     = &mpegts_muxer_class,
 };

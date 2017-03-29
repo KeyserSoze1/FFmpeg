@@ -126,6 +126,8 @@ typedef struct SegmentContext {
     SegmentListEntry cur_entry;
     SegmentListEntry *segment_list_entries;
     SegmentListEntry *segment_list_entries_end;
+
+    int segment_copyts;    ///< EMBY
 } SegmentContext;
 
 static void print_csv_escaped_str(AVIOContext *ctx, const char *str)
@@ -651,6 +653,11 @@ static int seg_init(AVFormatContext *s)
     if (!seg->write_header_trailer)
         seg->individual_header_trailer = 0;
 
+    //EMBY
+    if (seg->segment_copyts)
+        seg->segment_count = seg->segment_idx;
+    //EMBY
+
     if (seg->header_filename) {
         seg->write_header_trailer = 1;
         seg->individual_header_trailer = 0;
@@ -904,7 +911,8 @@ calc_times:
         seg->cur_entry.index = seg->segment_idx + seg->segment_idx_wrap * seg->segment_idx_wrap_nb;
         seg->cur_entry.start_time = (double)pkt->pts * av_q2d(st->time_base);
         seg->cur_entry.start_pts = av_rescale_q(pkt->pts, st->time_base, AV_TIME_BASE_Q);
-        seg->cur_entry.end_time = seg->cur_entry.start_time;
+        seg->cur_entry.end_time = seg->cur_entry.start_time +
+            pkt->pts != AV_NOPTS_VALUE ? (double)(pkt->pts + pkt->duration) * av_q2d(st->time_base) : 0; //EMBY Addition to start_time
 
         if (seg->times || (!seg->frames && !seg->use_clocktime) && seg->write_empty)
             goto calc_times;
@@ -1049,6 +1057,7 @@ static const AVOption options[] = {
     { "segment_start_number", "set the sequence number of the first segment", OFFSET(segment_idx), AV_OPT_TYPE_INT, {.i64 = 0}, 0, INT_MAX, E },
     { "segment_wrap_number", "set the number of wrap before the first segment", OFFSET(segment_idx_wrap_nb), AV_OPT_TYPE_INT, {.i64 = 0}, 0, INT_MAX, E },
     { "strftime",          "set filename expansion with strftime at segment creation", OFFSET(use_strftime), AV_OPT_TYPE_BOOL, {.i64 = 0 }, 0, 1, E },
+    { "segment_copyts",    "adjust timestamps for -copyts setting",      OFFSET(segment_copyts), AV_OPT_TYPE_INT,   {.i64 = 0}, 0, 1,       E }, //EMBY
     { "increment_tc", "increment timecode between each segment", OFFSET(increment_tc), AV_OPT_TYPE_BOOL, {.i64 = 0 }, 0, 1, E },
     { "break_non_keyframes", "allow breaking segments on non-keyframes", OFFSET(break_non_keyframes), AV_OPT_TYPE_BOOL, {.i64 = 0}, 0, 1, E },
 
